@@ -9,7 +9,7 @@ EXCLUDE_SYMBOLS = [
     'BTCUSDT', 'USDCUSDT', 'BTCDOMUSDT', 'ALLUSDT', 
     'XAUUSDT', 'XAGUSDT', 'TSLAUSDT', 'EURUSDT', 'GBPUSDT'
 ]
-MIN_HISTORY_DAYS = 60     # 至少要有 60 天資料
+MIN_HISTORY_DAYS = 30     # 至少要有 30 天資料
 
 # 2. 噪音門檻 (Noise Gate)
 ATR_PERCENTILE_THRESHOLD = 0.95  # 排除 ATR% > P95 (極端波動)
@@ -21,11 +21,11 @@ RS_WINDOW_SHORT = 72    # 3 Days (hours)
 RS_WINDOW_MID = 168     # 7 Days
 RS_WINDOW_LONG = 336    # 14 Days
 RS_WEIGHTS = {
-    '14D': 0.50,
-    '7D': 0.30,
+    '14D': 0.40,
+    '7D': 0.40,
     '3D': 0.20
 }
-RS_HARD_THRESHOLD = 0.70  # RS_Rank 必須 > P70 (除了 Turning)
+RS_HARD_THRESHOLD = 0.75  # RS_Rank 必須 > P75 (除了 Turning)
 
 # 5. Setup 模組
 # VCP
@@ -33,14 +33,14 @@ VCP_IMPULSE_WINDOW = 72 # 3D
 VCP_IMPULSE_RANK = 0.80 # P80
 VCP_LOOKBACK_MIN = 24
 VCP_LOOKBACK_MAX = 168
-VCP_WIDTH_HISTORY_RANK = 0.20 # 寬度需在自身歷史 P20 以下
+VCP_WIDTH_HISTORY_RANK = 0.25 # 寬度需在自身歷史 P25 以下
 VCP_POS_THRESHOLD = 0.66      # 收盤價在區間 > 2/3
 
 # PowerPlay
 PP_LOOKBACK_BREAKOUT = 48
 PP_TR_HISTORY_RANK = 0.90     # Breakout TR > P90
 PP_CLOSE_POS_RANK = 0.75      # 收盤在 K 棒上方 P75
-PP_FLAG_WIDTH_RANK = 0.20     # 旗形寬度 < P20
+PP_FLAG_WIDTH_RANK = 0.25     # 旗形寬度 < P25
 
 # 評分權重
 SCORE_WEIGHTS = {
