@@ -60,7 +60,7 @@ class CryptoScreener:
         for symbol in valid_symbols:
             df = processed_data[symbol]
             
-            # [修正點] 使用 .ffill() 取代舊版 .fillna(method='ffill')
+            # 使用 .ffill() 取代舊版 .fillna(method='ffill')
             btc_aligned = self.btc.reindex(df.index).ffill()
             
             # Log Return Calculation
@@ -124,8 +124,15 @@ class CryptoScreener:
             
             close_now = df['close'].iloc[-1]
             
+            # [關鍵修正] 設定 Index 為 Timestamp 才能進行 resample
             # Resample to 4H for Trend Check
-            df_4h = df.resample('4h').agg({'open':'first', 'high':'max', 'low':'min', 'close':'last'}).dropna()
+            df_4h = df.set_index('timestamp').resample('4h').agg({
+                'open':'first', 
+                'high':'max', 
+                'low':'min', 
+                'close':'last'
+            }).dropna()
+
             if len(df_4h) < 55: continue
             
             ema20_4h = calculate_ema(df_4h['close'], 20)
@@ -133,7 +140,7 @@ class CryptoScreener:
             ema50_4h = calculate_ema(df_4h['close'], 50)
             
             # Slope of EMA50 4H (Check last vs 10 bars ago)
-            ema50_slope_pos = ema50_4h.iloc[-1] > ema50_4h.iloc[-3] # 稍微寬鬆一點，用3根4H
+            ema50_slope_pos = ema50_4h.iloc[-1] > ema50_4h.iloc[-3] 
             
             trend_gate_4h = (df_4h['close'].iloc[-1] > ema20_4h.iloc[-1] and 
                              ema20_4h.iloc[-1] > ema45_4h.iloc[-1] and 
