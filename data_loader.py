@@ -9,40 +9,43 @@ logger = logging.getLogger(__name__)
 
 class DataLoader:
     def __init__(self):
-        # 1. 從環境變數讀取 Key (Zeabur Variables)
+        # 1. 從環境變數讀取 Key
         api_key = os.getenv('BINANCE_API_KEY')
         secret_key = os.getenv('BINANCE_SECRET_KEY')
 
         # 2. 設定 CCXT 基礎參數
         exchange_config = {
-            'enableRateLimit': True,  # 必開，自動管理請求間隔
+            'enableRateLimit': True,  
             'options': {
-                'defaultType': 'future',        # 鎖定 USDT 合約市場
-                'adjustForTimeDifference': True # 自動校正時間差，防止 Zeabur 報錯
+                'defaultType': 'future',
+                'adjustForTimeDifference': True
             }
         }
 
-        # 3. 判斷是否啟用驗證模式
         if api_key and secret_key:
             exchange_config['apiKey'] = api_key
             exchange_config['secret'] = secret_key
-            logger.info("Using Authenticated Binance API (Higher Rate Limits).")
         else:
-            logger.warning("⚠️ No API Keys found. Using Public API (Lower Rate Limits).")
+            logger.warning("⚠️ No API Keys found. Using Public API.")
 
         self.exchange = ccxt.binance(exchange_config)
 
     async def fetch_markets(self):
-        """抓取所有可交易的 USDT 永續合約"""
+        """抓取市場清單 (加入防禦性 .get)"""
         try:
             markets = await self.exchange.load_markets()
             symbols = []
             for symbol, info in markets.items():
-                # 嚴格篩選條件
-                if (info['quote'] == 'USDT' and 
-                    info['contract'] and 
-                    info['type'] == 'swap' and 
-                    info['active'] and 
+                # 使用 .get() 避免 KeyError
+                quote = info.get('quote')
+                is_contract = info.get('contract')
+                type_ = info.get('type')
+                is_active = info.get('active')
+
+                if (quote == 'USDT' and 
+                    is_contract and 
+                    type_ == 'swap' and 
+                    is_active and 
                     symbol not in EXCLUDE_SYMBOLS):
                     symbols.append(symbol)
             return symbols
@@ -50,76 +53,78 @@ class DataLoader:
             logger.error(f"Error fetching markets: {e}")
             return []
 
-    async def fetch_ohlcv(self, symbol, timeframe='1h', limit=1500):
+    async def fetch_ohlcv(self, symbol, semaphore, timeframe='1h', limit=1500):
         """
-        抓取單一幣種 K 線
-        limit=1500 約等於 62 天 (24*62=1488)，滿足 60 天需求
+        抓取 K 線 (加入 Semaphore 限制併發數量)
+        並在回傳前設定 DatetimeIndex
         """
-        try:
-            # 異步抓取
-            ohlcv = await self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
-            if not ohlcv:
-                return None
-            
-            # 轉換為 DataFrame
-            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            
-            # 資料長度檢查
-            if len(df) < MIN_HISTORY_DAYS * 24:
-                return None
+        async with semaphore:  # 限制同時連線數
+            try:
+                # 稍微 sleep 一下讓 event loop 有喘息空間
+                await asyncio.sleep(0.05) 
                 
-            return df
-        except Exception as e:
-            # 捕捉錯誤但不中斷程式，只記錄 Warning
-            logger.warning(f"Error fetching {symbol}: {e}")
-            return None
+                ohlcv = await self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+                if not ohlcv:
+                    return None
+                
+                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                
+                # [關鍵修正] 設定 Index
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                df = df.set_index('timestamp').sort_index()
+                
+                # 資料長度檢查
+                if len(df) < MIN_HISTORY_DAYS * 24:
+                    return None
+                    
+                return df
+            except Exception as e:
+                logger.warning(f"Error fetching {symbol}: {e}")
+                return None
 
     async def get_all_data(self):
-        """主流程：並發抓取所有幣種數據"""
         try:
             symbols = await self.fetch_markets()
             
-            # 確保 BTCUSDT 一定在清單中 (作為 Benchmark)
-            # CCXT 的 symbol 格式通常是 'BTC/USDT:USDT'
+            # 確保 BTCUSDT
             btc_found = False
             for s in symbols:
                 if 'BTC/USDT' in s:
                     btc_found = True
                     break
             
-            # 如果清單沒掃到 BTC (極少見)，手動加回去以防萬一
             if not btc_found:
-                logger.info("Adding BTC/USDT:USDT to symbols manually for benchmark.")
+                logger.info("Adding BTC/USDT:USDT manually.")
                 symbols.append('BTC/USDT:USDT')
 
-            logger.info(f"Fetching data for {len(symbols)} symbols...")
+            logger.info(f"Fetching data for {len(symbols)} symbols with Semaphore(10)...")
             
-            # 建立異步任務清單
-            tasks = {symbol: self.fetch_ohlcv(symbol) for symbol in symbols}
+            # [關鍵修正] 使用 Semaphore 限制併發
+            # Zeabur 免費/輕量方案建議 5-10，避免瞬間記憶體爆炸
+            sem = asyncio.Semaphore(10)
             
-            # 並發執行 (Gather)
-            results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+            tasks = [self.fetch_ohlcv(symbol, sem) for symbol in symbols]
+            
+            # 執行所有任務
+            results = await asyncio.gather(*tasks, return_exceptions=True)
             
             data_map = {}
             btc_data = None
             
-            for symbol, result in zip(tasks.keys(), results):
+            # 因為 tasks 是 list，results 會按順序對應 symbols
+            for symbol, result in zip(symbols, results):
                 if isinstance(result, pd.DataFrame):
-                    # 正規化 Symbol 名稱 (移除 CCXT 的後綴，變成 BTCUSDT 格式)
                     clean_sym = symbol.replace('/USDT:USDT', 'USDT').replace('/', '')
-                    
                     data_map[clean_sym] = result
                     
                     if clean_sym == 'BTCUSDT':
                         btc_data = result
 
             if btc_data is None:
-                raise Exception("Critical: BTCUSDT data not found. Cannot run benchmark.")
+                raise Exception("Critical: BTCUSDT data not found.")
 
-            logger.info(f"Successfully loaded data for {len(data_map)} symbols.")
+            logger.info(f"Successfully loaded {len(data_map)} symbols.")
             return data_map, btc_data
 
         finally:
-            # 確保連線關閉
             await self.exchange.close()
