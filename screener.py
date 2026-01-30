@@ -59,7 +59,9 @@ class CryptoScreener:
         
         for symbol in valid_symbols:
             df = processed_data[symbol]
-            btc_aligned = self.btc.reindex(df.index).fillna(method='ffill')
+            
+            # [修正點] 使用 .ffill() 取代舊版 .fillna(method='ffill')
+            btc_aligned = self.btc.reindex(df.index).ffill()
             
             # Log Return Calculation
             df['log_close'] = np.log(df['close'])
@@ -175,11 +177,6 @@ class CryptoScreener:
                 # Self-History Width Rank
                 # 計算過去 60 天，同樣長度 L 的 width 分布
                 past_widths = (df['high'].rolling(L).max() - df['low'].rolling(L).min()) / df['atr']
-                width_rank = (past_widths.iloc[-24*60:] < width).mean() # 這是 "比現在小的比例"，我們要看現在是不是很小
-                # 正確的 Percentile: (Count where hist < current) / Total. 
-                # 如果 current 是極小， rank 應該很低。
-                # 改用 pandas rank:
-                current_width_rank = pd.Series([width]).rank(pct=True).iloc[0] # 這沒意義
                 # 簡單做法：計算當前 width 在過去 series 中的 percentile
                 width_pct = (past_widths.iloc[-24*60:] < width).mean()
                 
